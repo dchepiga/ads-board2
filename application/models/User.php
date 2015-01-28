@@ -5,9 +5,9 @@ class User extends Model
     protected $table = 'users';
     protected $linksTable = 'confirmationLinks';
     protected $rules = [
-        'login' => ['login', 'min_length(3)', 'max_length(32)'],
-        'email' => ['email'],
-        'password' => ['min_length(3)', 'max_length(32)']
+        'login' => ['login', 'min_length(3)', 'max_length(32)', 'required', 'unique'],
+        'email' => ['email', 'required', 'unique'],
+        'password' => ['min_length(3)', 'max_length(32)', 'required']
     ];
 
     function getBy($field, $value, $table = 'users')
@@ -57,8 +57,9 @@ class User extends Model
         return $this->newHash($id . $_SERVER['HTTP_USER_AGENT']);
     }
 
-    function getIdByHash($hash)
+    function getIdByHash()
     {
+        $hash = $_COOKIE['hash'];
         return $this->db->fetchOne($this->table, 'id', ['hash' => $hash]);
     }
 
@@ -97,19 +98,8 @@ class User extends Model
             'email' => $email,
             'password' => $password
         ];
-        $result = $this->validator->validate($input, $this->rules);
-        if ($result !== true) {
-            $error = $result;
-        }
+        $error = $this->validator->validate($input, $this->rules, $this->table);
 
-        $loginExists = $this->inputExists('login', $input['login']);
-        $emailExists = $this->inputExists('email', $input['email']);
-        if ($loginExists !== false) {
-            $error['login'] = $input['login'] . ' is already exists';
-        }
-        if ($emailExists !== false) {
-            $error['email'] = $input['email'] . ' is already exists';
-        }
         if (empty($error)) {
             $data = [
                 'login' => $input['login'],
@@ -126,30 +116,16 @@ class User extends Model
         }
     }
 
-    public function update($fields = [])
+    public function update($fields)
     {
         $user = $this->getBy('id', $_SESSION['userId']);
         $error = [];
-        $validate = true;
+        $validate = [];
 
-        if (isset($fields['login']) && $fields['login'] !== $user['login']) {
-            $loginExists = $this->inputExists('login', $fields['login']);
-            if ($loginExists !== false) {
-                $error['login'] = $fields['login'] . ' is already exists';
-            } else {
-                $input ['login'] = $fields['login'];
-            }
-        }
-
-        if (isset($fields['email']) && $fields['email'] !== $user['email']) {
-            $emailExists = $this->inputExists('email', $fields['email']);
-            if ($emailExists !== false) {
-                $error['email'] = $fields['email'] . ' is already exists';
-            } else {
-                $input ['email'] = $fields['email'];
-            }
-        }
-
+        if ($fields['login']!==$user['login'])
+            $input['login'] = $fields['login'];
+        if ($fields['email']!==$user['email'])
+            $input['email'] = $fields['email'];
 
         if (!empty($fields['old-password'])) {
             if (password_verify($fields['old-password'], $user['password'])) {
@@ -162,13 +138,14 @@ class User extends Model
         }
         if (isset($input)) {
             $rules = $this->getCutRules($input, $this->rules);
-            $validate = $this->validator->validate($input, $rules);
+            $validate = $this->validator->validate($input, $rules, $this->table);
         }
 
-        if ($validate !== true) {
-            $error = array_merge_recursive($error, $validate);
-        }
+        $error = array_merge_recursive($error, $validate);
+
         if (empty($error) && !empty($input)) {
+            if (isset($input ['password']))
+                $input ['password'] = password_hash($input ['password'], PASSWORD_DEFAULT);
             $this->db->update($this->table, $input, ['id' => $user['id']]);
             return true;
         } elseif (empty($error)) {
@@ -218,41 +195,48 @@ class User extends Model
     {
         $user = $this->getBy('link', $link,
             'confirmationLinks');//getting object with user data by confirmation link from email
-        $this->db->query("INSERT INTO payments (paymentType,price,planId,userId)
-                            VALUES ('free','0,0','1',{$user['id']})");
+        $planName = $this->db->fetchOne('plans','id',['name' => 'free']);
+        $adsTotal = $this->db->fetchOne('plans','posts',['name' => 'free']);
+        $price = $this->db->fetchOne('plans','price',['name' => 'free']);
+        $this->db->query("INSERT INTO currentPlan (price,adsCounter,planId,userId)
+                            VALUES ({$price},{$adsTotal},{$planName},{$user['id']})");
     }
 
     function changePlan($planType)
     {
         switch ($planType) {
             case 'pro':
-                $price = '99.99';
+                $price = $this->db->fetchOne('plans','price',['name' => 'pro']);
+                $adsTotal = $this->db->fetchOne('plans','posts',['name' => 'pro']);
                 $planId = '2';//table plans : 2-pro-Plan(1- Free Plan, user got it by default when confirmed his acc)
                 break;
             case 'business':
-                $price = '199.9';
+                $price = $this->db->fetchOne('plans','price',['name' => 'business']);
+                $adsTotal = $this->db->fetchOne('plans','posts',['name' => 'business']);
                 $planId = '3';//table plans : 3- business plan
                 break;
         }
         $transactionId = $_SESSION['transactionId'];
         $hash = $_COOKIE['hash'];
         $user = $this->getBy('hash', $hash);
-        $this->db->query("UPDATE payments SET paymentType = 'paypal', endDate = DATE_ADD(NOW(), INTERVAL 1 MONTH ), price = '{$price}', planId = '{$planId}' WHERE userId = {$user['id']}");
-        $endDate = $this->db->fetchOne('payments', 'endDate', ['userId' => $user['id']]);
-        $this->db->query("INSERT INTO operations(date,paymentType,planName,planCost,transactionId,userId) VALUES (DATE_ADD('{$endDate}', INTERVAL -1 MONTH),'paypal','{$planType}','{$price}','{$transactionId}',{$user['id']})");
+        $this->db->query("UPDATE currentPlan SET endDate = DATE_ADD(NOW(), INTERVAL 1 MONTH ), price = '{$price}', adsCounter = '{$adsTotal}', planId = '{$planId}' WHERE userId = {$user['id']}");
+        $endDate = $this->db->fetchOne('currentPlan','endDate',['userId' => $user['id']]);
+        $this->db->query("INSERT INTO payments(date,paymentType,planName,planCost,transactionId,userId) VALUES (DATE_ADD('{$endDate}', INTERVAL -1 MONTH), 'paypal', '{$planType}','{$price}','{$transactionId}',{$user['id']})");
     }
 
     function checkCurrentPlan()
     {
         $hash = $_COOKIE['hash'];
-        $user = $this->getBy('hash', $hash);
-        $currentPlan = $this->db->fetchOne('payments', 'planId', ['userId' => $user['id']]);
+        $user = $this->getBy('hash',$hash);
+        $currentPlan = $this->db->fetchOne('currentPlan','planId',['userId' => $user['id']]);
 
-        /*Start reset-block: resets plan to free if payments.endDate expired*/
-        $endDate = $this->db->fetchOne('payments', 'endDate',
-            ['userId' => $user['id']]);//getting expiration date of plan
-        if (strtotime($endDate) < time()) {
+        /*Start reset-block: resets plan to free if currentPlan.endDate expired*/
+        $endDate = $this->db->fetchOne('currentPlan','endDate',['userId' => $user['id']]);//getting expiration date of plan
+        if(strtotime($endDate) < time() && $endDate != NULL) {
             $this->resetPlan($user['id']);//reset to free if plan is no more available
+        }
+
+        if($endDate == NULL) {
             $endDate = 'Termless';
         }
         /*end reset-block*/
@@ -285,7 +269,25 @@ class User extends Model
 
     function resetPlan($userId)//reset user plan to free by userId
     {
-        $this->db->query("UPDATE payments SET paymentType ='free', endDate = NULL, price = '0.0', planId = '1', userId = {$userId} WHERE userId = {$userId}");
+        $adsTotal = $this->db->fetchOne('plans','posts',['name' => 'free']);
+        $price = $this->db->fetchOne('plans','price',['name' => 'free']);
+        $planId = $this->db->fetchOne('plans','id',['name' => 'free']);
+        $this->db->query("UPDATE currentPlan SET endDate = NULL, adsCounter = {$adsTotal}, price = {$price}, planId = {$planId}, userId = {$userId} WHERE userId = {$userId}");
+    }
+
+    function adsCounter($adsCounter)
+    {
+        if($adsCounter > 0) {
+            $userId = $this->getIdByHash();
+            $this->db->query("UPDATE currentPlan SET adsCounter = adsCounter - 1 WHERE userId = {$userId}");
+        }
+    }
+
+    function checkAdsCounter()
+    {
+        $userId = $this->getIdByHash();
+        $adsCounter = $this->db->fetchOne('currentPlan','adsCounter',['userId' => $userId]);
+        return $adsCounter;
     }
 
 
@@ -338,77 +340,5 @@ FROM users
     {
         $password = password_hash($password, PASSWORD_DEFAULT);
         $this->db->update($this->table, ['password' => $password], ['id' => $id]);
-    }
-
-    /**
-     * Checks if user exist
-     *
-     * @param $email
-     * @return bool
-     */
-    public function isUserExist($email)
-    {
-        if ($this->getBy('email', $email)) {
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Create or update restore info
-     *
-     * @param $email
-     * @param $newPassword
-     * @param $link
-     * @throws DatabaseErrorException
-     */
-    public function saveRestoreInfo($email, $newPassword, $link)
-    {
-        $userId = $this->db->query("SELECT id FROM users WHERE email='{$email}'")->fetch(PDO::FETCH_ASSOC)['id'];
-        $infoExist = $this->getRestoreInfoByUserId($userId);
-
-        try {
-            if ($infoExist) { // if info exist just update
-                $this->db->query("UPDATE restoreLinks SET link = '{$link}', newPassword = '{$newPassword}' WHERE userId='{$infoExist['userId']}'");
-
-            } else { // else create new row
-                $this->db->query("INSERT INTO restoreLinks (link, newPassword, userId)
-VALUES ('{$link}', '{$newPassword}', '{$userId}')");
-            }
-        } catch (PDOException $e) {
-            throw new DatabaseErrorException();
-        }
-    }
-
-    /**
-     * Delete restore info
-     *
-     * @param $id
-     */
-    public function deleteRestoreInfo($id)
-    {
-        $this->db->delete('restoreLinks', ['id' => $id]);
-    }
-
-    /**
-     * Retrieve restore info (id, userId, newPassword) by userId
-     *
-     * @param $userId
-     * @return array
-     */
-    public function getRestoreInfoByUserId($userId)
-    {
-        return $this->db->query("SELECT id, userId, newPassword FROM restoreLinks WHERE userId='{$userId}'")->fetch(PDO::FETCH_ASSOC);
-    }
-
-    /**
-     * Retrieve restore info (id, userId, newPassword) by link
-     *
-     * @param $link
-     * @return array
-     */
-    public function getRestoreInfoByLink($link)
-    {
-        return $this->db->query("SELECT id, userId, newPassword FROM restoreLinks WHERE link='{$link}'")->fetch(PDO::FETCH_ASSOC);
     }
 }
