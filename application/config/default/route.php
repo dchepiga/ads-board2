@@ -28,6 +28,14 @@ return [
                 'adsId' => '[1]'
             )
         ),
+        'postlist' => array(
+            'template' => '^\/postlist\/(.*)$',
+            'controller' => 'home', //static
+            'action' => 'postlist',//static
+            'params' => array(
+                'page' => '[1]'
+            )
+        ),
         'search' => array(
             'template' => '^\/search\/(\w+)$',
             'controller' => 'searching', //static

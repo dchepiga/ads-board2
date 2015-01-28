@@ -63,6 +63,8 @@ class HomeController extends BaseController
     public function adsLoadAction()
     {
         $catId = $_POST['catId'];
+        $pageNum = $this->getParams('page');
+        $adsPerPage = Config::get('site')['adsPerPage'];
 
         if ($catId == 0) {
             $ads = $this->advertisementModel->getAllAdvertisements();
@@ -72,6 +74,7 @@ class HomeController extends BaseController
 
         // attach images to advertisement list
         $this->advertisementImgModel->attachImagesToAdsList($ads);
+        echo count($ads);
 
         if (!empty($ads)) {
             echo json_encode($ads);

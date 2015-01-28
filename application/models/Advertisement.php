@@ -70,6 +70,21 @@ class Advertisement extends Model
         }
     }
 
+    public function getAdvertisementsPerPage($offset, $adsPerPage)
+    {
+        try {
+            return $this->db->query('select a.id, a.subject, a.description, a.price, a.creationDate, c.title, u.login from (select id from advertisements
+                                                                                       order by id LIMIT '.$offset.', '.$adsPerPage.') o
+    INNER JOIN advertisements a on a.id = o.id
+  INNER JOIN categories c on a.categoryId=c.id
+  INNER JOIN users u on a.userId=u.id
+order by a.id')->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            throw new DatabaseErrorException();
+        }
+    }
+
+
     /**
      * Extract all posts from db with link at image
      *
